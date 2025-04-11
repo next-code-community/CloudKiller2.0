@@ -1,0 +1,15 @@
+requests>=2.28.0
+colorama>=0.4.6
+dnspython>=2.3.0
+urllib3>=1.26.15
+tqdm>=4.65.0
+pyfiglet>=0.8.post1
+validators>=0.20.0
+python-dateutil>=2.8.2
+concurrent-log-handler>=0.9.24
+argparse>=1.4.0
+configparser>=5.3.0
+ipaddress>=1.0.23
+socket.io-client>=0.5.3
+socksio>=1.0.0
+websocket-client>=1.5.1
