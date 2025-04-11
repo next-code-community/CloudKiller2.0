@@ -252,7 +252,7 @@ def send_discord_notification(webhook_url, domain, ip_address, status_code, resp
             "footer": {
                 "text": "CloudKiller v2.0 by FD"
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }]
     }
     
