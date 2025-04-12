@@ -1,5 +1,4 @@
-
-        #!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -21,6 +20,7 @@ import ssl
 import random
 import hashlib
 import base64
+import subprocess
 import concurrent.futures
 import logging
 import platform
@@ -50,7 +50,7 @@ PROXY_LOCK = threading.Lock()
 TOTAL_CHECKED = 0
 TOTAL_SUBDOMAINS = 0
 START_TIME = time.time()
-CONFIG_FILE = 'cloudkiller2.0.conf'
+CONFIG_FILE = 'cloudkiller.conf'
 CURRENT_PROXY_INDEX = 0
 PROXIES = []
 DNS_SERVERS = []
@@ -625,7 +625,6 @@ def get_ssl_info(domain, port=443):
                 
                 # Calculate certificate fingerprints
                 try:
-                    import hashlib
                     cert_dict['fingerprint_sha1'] = hashlib.sha1(cert_bin).hexdigest()
                     cert_dict['fingerprint_sha256'] = hashlib.sha256(cert_bin).hexdigest()
                 except Exception:
@@ -639,9 +638,8 @@ def get_ssl_info(domain, port=443):
                 cert_dict['alt_domains'] = alt_domains
                 
                 # Check certificate validity
-                import datetime
-                not_after = datetime.datetime.strptime(cert_dict['not_after'], '%b %d %H:%M:%S %Y GMT')
-                days_left = (not_after - datetime.datetime.now()).days
+                not_after = datetime.strptime(cert_dict['not_after'], '%b %d %H:%M:%S %Y GMT')
+                days_left = (not_after - datetime.now()).days
                 cert_dict['days_left'] = days_left
                 cert_dict['is_expired'] = days_left < 0
                 
@@ -787,7 +785,6 @@ def get_favicon_hash(url):
     """Get the favicon hash for a URL (useful for fingerprinting)."""
     try:
         import mmh3
-        import base64
         
         favicon_url = f"{url}/favicon.ico"
         response = requests.get(favicon_url, timeout=5, verify=False)
@@ -877,16 +874,6 @@ def detect_technologies(resp):
         'HubSpot': ['hubspot', 'hs-script', 'hubspot.com'],
         'Intercom': ['intercom', 'intercomcdn', 'intercom.io'],
         'Hotjar': ['hotjar', 'static.hotjar.com', '_hjSettings'],
-        
-        # E-commerce
-        'Stripe': ['stripe', 'js.stripe.com', 'Stripe.'],
-        'PayPal': ['paypal', 'paypalobjects.com', 'checkout.paypal.com'],
-        'Shopify Payments': ['shopify payments', 'checkout.shopify.com'],
-        
-        # Caching/Performance
-        'Redis': ['redis', 'Redis', 'X-Redis'],
-        'Varnish': ['varnish', 'Varnish', 'X-Varnish'],
-        'Memcached': ['memcached', 'Memcached', 'X-Memcached'],
     }
     
     detected_tech = []
@@ -939,6 +926,955 @@ def detect_technologies(resp):
     
     # Return unique technologies
     return list(set(detected_tech))
+
+# Advanced subdomain generation functions
+def generate_permutations(domain, patterns):
+    """Generate permutations of subdomains based on common patterns."""
+    permutations = []
+    base_domain = domain.split('.', 1)[1] if '.' in domain else domain
+    subdomain_part = domain.split('.')[0] if '.' in domain else ""
+    
+    for pattern in patterns:
+        # Format 1: pattern.domain.com
+        permutations.append(f"{pattern}.{base_domain}")
+        
+        # Format 2: domain-pattern.domain.com
+        if subdomain_part:
+            permutations.append(f"{subdomain_part}-{pattern}.{base_domain}")
+            
+        # Format 3: pattern-domain.domain.com
+        if subdomain_part:
+            permutations.append(f"{pattern}-{subdomain_part}.{base_domain}")
+    
+    return permutations
+
+def generate_random_subdomains(domain, count=100):
+    """Generate random subdomain names for fuzzing."""
+    random_subdomains = []
+    base_domain = domain.split('.', 1)[1] if '.' in domain else domain
+    
+    # Character sets
+    chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    
+    # Generate random subdomain lengths (mostly 2-8 chars)
+    lengths = [2] * 10 + [3] * 20 + [4] * 30 + [5] * 20 + [6] * 10 + [7] * 5 + [8] * 5
+    
+    for _ in range(count):
+        # Choose a random length
+        length = random.choice(lengths)
+        
+        # Generate random subdomain
+        subdomain = ''.join(random.choice(chars) for _ in range(length))
+        
+        # Create full domain
+        random_domain = f"{subdomain}.{base_domain}"
+        
+        random_subdomains.append(random_domain)
+    
+    return random_subdomains
+
+def mutate_wordlist(wordlist, domain):
+    """Mutate wordlist by applying common patterns and replacements."""
+    mutations = []
+    base_domain = domain.split('.', 1)[1] if '.' in domain else domain
+    
+    for word in wordlist:
+        # Original word
+        mutations.append(f"{word}.{base_domain}")
+        
+        # Add common prefixes
+        prefixes = ['dev', 'stage', 'test', 'beta', 'api', 'admin', 'internal', 'prod', 'staging', 'qa']
+        for prefix in prefixes:
+            mutations.append(f"{prefix}-{word}.{base_domain}")
+            mutations.append(f"{prefix}.{word}.{base_domain}")
+        
+        # Add common suffixes
+        suffixes = ['api', 'admin', 'app', 'test', 'dev', 'staging', 'prod', 'internal', 'backup', 'old']
+        for suffix in suffixes:
+            mutations.append(f"{word}-{suffix}.{base_domain}")
+            mutations.append(f"{word}.{suffix}.{base_domain}")
+        
+        # Common number patterns
+        for num in range(1, 10):
+            mutations.append(f"{word}{num}.{base_domain}")
+            mutations.append(f"{word}-{num}.{base_domain}")
+        
+        # Year patterns
+        for year in range(2020, 2026):
+            mutations.append(f"{word}-{year}.{base_domain}")
+            mutations.append(f"{word}{year}.{base_domain}")
+            
+        # Character replacements
+        replacements = [('o', '0'), ('i', '1'), ('e', '3'), ('a', '4'), ('s', '5'), ('b', '8')]
+        for old, new in replacements:
+            if old in word:
+                mutations.append(f"{word.replace(old, new)}.{base_domain}")
+    
+    return mutations
+
+# Passive subdomain discovery methods
+def discover_from_certificate_transparency(domain, config):
+    """Discover subdomains from certificate transparency logs."""
+    subdomains = set()
+    
+    # crt.sh
+    try:
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        response = requests.get(url, timeout=int(config['Passive']['passive_timeout']), verify=False)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                for entry in data:
+                    if 'name_value' in entry:
+                        for subdomain in entry['name_value'].split('\n'):
+                            subdomain = subdomain.strip()
+                            if subdomain.endswith(domain) and subdomain != domain and '*' not in subdomain:
+                                subdomains.add(subdomain)
+                
+                print(green(f"[+] Found {len(subdomains)} subdomains from certificate transparency"))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse JSON from crt.sh")
+        else:
+            logger.warning(f"crt.sh returned status code {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error querying crt.sh: {e}")
+    
+    # certspotter
+    try:
+        url = f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names"
+        response = requests.get(url, timeout=int(config['Passive']['passive_timeout']), verify=False)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                for entry in data:
+                    if 'dns_names' in entry:
+                        for name in entry['dns_names']:
+                            if name.endswith(domain) and name != domain and '*' not in name:
+                                subdomains.add(name)
+                
+                print(green(f"[+] Found {len(subdomains)} total subdomains from certificate transparency sources"))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse JSON from certspotter")
+        else:
+            logger.warning(f"certspotter returned status code {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error querying certspotter: {e}")
+    
+    return list(subdomains)
+
+def discover_from_dns_bufferover(domain, config):
+    """Discover subdomains from dns.bufferover.run."""
+    subdomains = set()
+    
+    try:
+        url = f"https://dns.bufferover.run/dns?q=.{domain}"
+        response = requests.get(url, timeout=int(config['Passive']['passive_timeout']), verify=False)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if 'FDNS_A' in data:
+                    for entry in data['FDNS_A']:
+                        parts = entry.split(',')
+                        if len(parts) == 2:
+                            subdomain = parts[1]
+                            if subdomain.endswith(domain) and subdomain != domain:
+                                subdomains.add(subdomain)
+                
+                print(green(f"[+] Found {len(subdomains)} subdomains from dns.bufferover.run"))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse JSON from dns.bufferover.run")
+        else:
+            logger.warning(f"dns.bufferover.run returned status code {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error querying dns.bufferover.run: {e}")
+    
+    return list(subdomains)
+
+def discover_from_threatcrowd(domain, config):
+    """Discover subdomains from threatcrowd."""
+    subdomains = set()
+    
+    try:
+        url = f"https://threatcrowd.org/searchApi/v2/domain/report/?domain={domain}"
+        response = requests.get(url, timeout=int(config['Passive']['passive_timeout']), verify=False)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if 'subdomains' in data:
+                    for subdomain in data['subdomains']:
+                        if subdomain.endswith(domain) and subdomain != domain:
+                            subdomains.add(subdomain)
+                
+                print(green(f"[+] Found {len(subdomains)} subdomains from threatcrowd"))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse JSON from threatcrowd")
+        else:
+            logger.warning(f"threatcrowd returned status code {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error querying threatcrowd: {e}")
+    
+    return list(subdomains)
+
+def discover_from_alienvault(domain, config):
+    """Discover subdomains from AlienVault OTX."""
+    subdomains = set()
+    
+    try:
+        url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
+        response = requests.get(url, timeout=int(config['Passive']['passive_timeout']), verify=False)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if 'passive_dns' in data:
+                    for entry in data['passive_dns']:
+                        if 'hostname' in entry:
+                            hostname = entry['hostname']
+                            if hostname.endswith(domain) and hostname != domain:
+                                subdomains.add(hostname)
+                
+                print(green(f"[+] Found {len(subdomains)} subdomains from AlienVault OTX"))
+            except json.JSONDecodeError:
+                logger.error("Failed to parse JSON from AlienVault OTX")
+        else:
+            logger.warning(f"AlienVault OTX returned status code {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error querying AlienVault OTX: {e}")
+    
+    return list(subdomains)
+
+def discover_from_shodan(domain, config):
+    """Discover subdomains from Shodan."""
+    subdomains = set()
+    
+    # Check if Shodan API key is configured
+    api_key = config['API_Keys'].get('shodan', '')
+    if not api_key:
+        logger.warning("Shodan API key not configured. Skipping...")
+        return list(subdomains)
+    
+    # Check if shodan module is available
+    if not SHODAN_AVAILABLE:
+        logger.warning("Shodan Python module not installed. Skipping...")
+        return list(subdomains)
+    
+    try:
+        api = shodan.Shodan(api_key)
+        results = api.search(f"hostname:{domain}")
+        
+        for result in results['matches']:
+            if 'hostnames' in result:
+                for hostname in result['hostnames']:
+                    if hostname.endswith(domain) and hostname != domain:
+                        subdomains.add(hostname)
+        
+        print(green(f"[+] Found {len(subdomains)} subdomains from Shodan"))
+    except Exception as e:
+        logger.error(f"Error querying Shodan: {e}")
+    
+    return list(subdomains)
+
+def discover_from_censys(domain, config):
+    """Discover subdomains from Censys."""
+    subdomains = set()
+    
+    # Check if Censys API credentials are configured
+    api_id = config['API_Keys'].get('censys_id', '')
+    api_secret = config['API_Keys'].get('censys_secret', '')
+    
+    if not api_id or not api_secret:
+        logger.warning("Censys API credentials not configured. Skipping...")
+        return list(subdomains)
+    
+    # Check if censys module is available
+    if not CENSYS_AVAILABLE:
+        logger.warning("Censys Python module not installed. Skipping...")
+        return list(subdomains)
+    
+    try:
+        censys_api = censys.search.CensysHosts(api_id=api_id, api_secret=api_secret)
+        query = f"services.tls.certificates.leaf_data.names: {domain}"
+        
+        for page in censys_api.search(query, pages=3):
+            for host in page:
+                if 'services' in host:
+                    for service in host['services']:
+                        if 'tls' in service and 'certificates' in service['tls']:
+                            leaf_cert = service['tls']['certificates']['leaf_data']
+                            if 'names' in leaf_cert:
+                                for name in leaf_cert['names']:
+                                    if name.endswith(domain) and name != domain and '*' not in name:
+                                        subdomains.add(name)
+        
+        print(green(f"[+] Found {len(subdomains)} subdomains from Censys"))
+    except Exception as e:
+        logger.error(f"Error querying Censys: {e}")
+    
+    return list(subdomains)
+
+def discover_subdomains_passive(domain, config):
+    """Use passive reconnaissance techniques to discover subdomains."""
+    all_subdomains = set()
+    
+    print(cyan("\n[*] Starting passive subdomain discovery..."))
+    
+    # Certificate Transparency
+    if config['Passive'].getboolean('cert_transparency'):
+        for subdomain in discover_from_certificate_transparency(domain, config):
+            all_subdomains.add(subdomain)
+    
+    # DNS Bufferover
+    if config['Passive'].getboolean('dns_bufferover'):
+        for subdomain in discover_from_dns_bufferover(domain, config):
+            all_subdomains.add(subdomain)
+    
+    # ThreatCrowd
+    if config['Passive'].getboolean('threatcrowd'):
+        for subdomain in discover_from_threatcrowd(domain, config):
+            all_subdomains.add(subdomain)
+    
+    # AlienVault OTX
+    if config['Passive'].getboolean('alienvault'):
+        for subdomain in discover_from_alienvault(domain, config):
+            all_subdomains.add(subdomain)
+    
+    # Shodan
+    if config['Passive'].getboolean('shodan'):
+        for subdomain in discover_from_shodan(domain, config):
+            all_subdomains.add(subdomain)
+    
+    # Censys
+    if config['Passive'].getboolean('censys'):
+        for subdomain in discover_from_censys(domain, config):
+            all_subdomains.add(subdomain)
+    
+    # Convert set to list and remove the base domain
+    subdomain_list = [s for s in all_subdomains if s != domain]
+    
+    if subdomain_list:
+        print(green(f"[+] Passive discovery found {len(subdomain_list)} unique subdomains"))
+    else:
+        print(yellow("[!] No subdomains found through passive discovery"))
+    
+    return subdomain_list
+
+# Port scanning and service discovery
+def scan_ports(ip, ports=None):
+    """Scan common ports on a target IP."""
+    if not NMAP_AVAILABLE:
+        return {"error": "nmap module not installed"}
+    
+    if not ports:
+        # Common web ports
+        ports = [80, 443, 8080, 8443, 3000, 8000, 8008, 8888]
+    
+    results = {}
+    
+    try:
+        scanner = nmap.PortScanner()
+        port_str = ','.join(map(str, ports))
+        scanner.scan(ip, port_str, arguments='-sT -sV -T4')
+        
+        for host in scanner.all_hosts():
+            results[host] = {}
+            for proto in scanner[host].all_protocols():
+                results[host][proto] = {}
+                for port in scanner[host][proto]:
+                    port_info = scanner[host][proto][port]
+                    results[host][proto][port] = {
+                        'state': port_info['state'],
+                        'service': port_info['name'],
+                        'product': port_info.get('product', ''),
+                        'version': port_info.get('version', '')
+                    }
+    except Exception as e:
+        results["error"] = str(e)
+    
+    return results
+
+# Vulnerability checking
+def check_common_vulnerabilities(domain, ip, technologies):
+    """Check for common vulnerabilities based on detected technologies."""
+    vulns = []
+    
+    # Check for WordPress vulnerabilities
+    if any('WordPress' in tech for tech in technologies):
+        # Check for wp-login.php
+        try:
+            resp = requests.get(f"http://{domain}/wp-login.php", timeout=5, verify=False)
+            if resp.status_code == 200:
+                vulns.append({
+                    'name': 'WordPress Login Page Exposed',
+                    'severity': 'Low',
+                    'description': 'WordPress login page is accessible and could be brute-forced'
+                })
+        except Exception:
+            pass
+        
+        # Check for xmlrpc.php
+        try:
+            resp = requests.get(f"http://{domain}/xmlrpc.php", timeout=5, verify=False)
+            if resp.status_code == 200 or resp.status_code == 405:
+                vulns.append({
+                    'name': 'WordPress XML-RPC Enabled',
+                    'severity': 'Medium',
+                    'description': 'XML-RPC interface is enabled which could be used for brute force attacks'
+                })
+        except Exception:
+            pass
+    
+    # Check for Joomla vulnerabilities
+    if any('Joomla' in tech for tech in technologies):
+        # Check for administrator login
+        try:
+            resp = requests.get(f"http://{domain}/administrator", timeout=5, verify=False)
+            if resp.status_code == 200:
+                vulns.append({
+                    'name': 'Joomla Admin Login Exposed',
+                    'severity': 'Low',
+                    'description': 'Joomla admin login page is accessible and could be brute-forced'
+                })
+        except Exception:
+            pass
+    
+    # Check for common misconfigurations
+    try:
+        # Check for .git directory exposure
+        resp = requests.get(f"http://{domain}/.git/HEAD", timeout=5, verify=False)
+        if resp.status_code == 200 and 'ref:' in resp.text:
+            vulns.append({
+                'name': '.git Directory Exposure',
+                'severity': 'High',
+                'description': 'Git repository metadata is exposed, potentially leaking source code'
+            })
+    except Exception:
+        pass
+    
+    try:
+        # Check for .env file exposure
+        resp = requests.get(f"http://{domain}/.env", timeout=5, verify=False)
+        if resp.status_code == 200 and ('APP_' in resp.text or 'DB_' in resp.text):
+            vulns.append({
+                'name': '.env File Exposure',
+                'severity': 'Critical',
+                'description': 'Environment configuration file is exposed, potentially leaking credentials'
+            })
+    except Exception:
+        pass
+    
+    try:
+        # Check for directory listing
+        resp = requests.get(f"http://{domain}/images/", timeout=5, verify=False)
+        if resp.status_code == 200 and 'Index of /images' in resp.text:
+            vulns.append({
+                'name': 'Directory Listing Enabled',
+                'severity': 'Low',
+                'description': 'Directory listing is enabled, potentially revealing sensitive files'
+            })
+    except Exception:
+        pass
+    
+    return vulns
+
+# Directory enumeration
+def check_common_directories(domain):
+    """Check for common sensitive directories."""
+    results = []
+    
+    common_dirs = [
+        '/admin', '/administrator', '/wp-admin',
+        '/backup', '/backups', '/database',
+        '/db', '/debug', '/install',
+        '/login', '/phpmyadmin', '/server-status',
+        '/test', '/tmp', '/upload',
+        '/uploads', '/config', '/jenkins',
+        '/log', '/logs', '/api',
+        '/console', '/web.config', '/.well-known'
+    ]
+    
+    for directory in common_dirs:
+        try:
+            url = f"http://{domain}{directory}"
+            resp = requests.get(url, timeout=3, verify=False)
+            
+            if resp.status_code in [200, 403, 401]:
+                results.append({
+                    'directory': directory,
+                    'status': resp.status_code,
+                    'content_length': len(resp.content)
+                })
+        except Exception:
+            pass
+    
+    return results
+
+# Subdomain takeover checking
+def check_takeover_vulnerability(domain):
+    """Check if a subdomain is vulnerable to takeover."""
+    takeover_signatures = {
+        'Amazon S3': [
+            'NoSuchBucket',
+            'The specified bucket does not exist'
+        ],
+        'GitHub Pages': [
+            'There isn\'t a GitHub Pages site here',
+            'Page not found',
+            'GitHub Page not found'
+        ],
+        'Heroku': [
+            'No such app',
+            'Heroku app not found',
+            'herokucdn.com/error-pages/no-such-app.html'
+        ],
+        'Azure': [
+            'This Azure Web App is not available',
+            'azurewebsites.net you\'ve reached doesn\'t exist'
+        ],
+        'Shopify': [
+            'Sorry, this shop is currently unavailable',
+            'Only one step left'
+        ],
+        'Fastly': [
+            'Fastly error: unknown domain'
+        ],
+        'Pantheon': [
+            'The gods are wise, but do not know of the site which you seek.'
+        ],
+        'Tumblr': [
+            'Whatever you were looking for doesn\'t currently exist at this address',
+            'There\'s nothing here.'
+        ],
+        'WordPress': [
+            'Do you want to register'
+        ],
+        'Zendesk': [
+            'this help center no longer exists'
+        ]
+    }
+    
+    try:
+        response = requests.get(f"http://{domain}", timeout=5, verify=False)
+        html_content = response.text.lower()
+        
+        for service, signatures in takeover_signatures.items():
+            for signature in signatures:
+                if signature.lower() in html_content:
+                    return {
+                        'vulnerable': True,
+                        'service': service,
+                        'signature': signature
+                    }
+        
+        return {'vulnerable': False}
+    except Exception:
+        return {'vulnerable': False, 'error': 'Connection failed'}
+
+# Recursive subdomain scanning
+def scan_recursively(domain, base_domain, depth, config, report_file, discord_webhook):
+    """Recursively scan subdomains of discovered subdomains."""
+    if depth <= 0:
+        return
+    
+    print(cyan(f"\n[*] Starting recursive scan for {domain} (depth {depth})..."))
+    
+    # Get the first part of the subdomain
+    subdomain_part = domain.split('.')[0]
+    
+    # Create a small wordlist based on the subdomain part
+    wordlist = [
+        f"dev.{subdomain_part}",
+        f"test.{subdomain_part}",
+        f"staging.{subdomain_part}",
+        f"api.{subdomain_part}",
+        f"admin.{subdomain_part}",
+        f"{subdomain_part}-dev",
+        f"{subdomain_part}-test",
+        f"{subdomain_part}-staging",
+        f"{subdomain_part}-api",
+        f"{subdomain_part}-admin"
+    ]
+    
+    # Add the wordlist to the base domain
+    full_domains = [f"{word}.{base_domain}" for word in wordlist]
+    
+    # Use a smaller thread count for recursive scans
+    thread_count = min(10, int(config['General']['threads']))
+    
+    print(yellow(f"[*] Checking {len(full_domains)} potential subdomains of {domain}..."))
+    
+    found_domains = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+        future_to_domain = {executor.submit(check_domain, d, config, report_file, discord_webhook): d for d in full_domains}
+        for future in concurrent.futures.as_completed(future_to_domain):
+            domain = future_to_domain[future]
+            try:
+                if future.result():
+                    found_domains.append(domain)
+            except Exception as e:
+                logger.error(f"Error scanning {domain}: {e}")
+    
+    # Recursively scan found domains
+    for found_domain in found_domains:
+        scan_recursively(found_domain, base_domain, depth - 1, config, report_file, discord_webhook)
+
+# Subdomain processing
+def load_subdomains(wordlist_path):
+    """Load subdomains from a wordlist file."""
+    if not os.path.exists(wordlist_path):
+        print(red(f"[!] Error: Wordlist file not found: {wordlist_path}"))
+        sys.exit(1)
+    
+    try:
+        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
+            subdomains = [line.strip() for line in f if line.strip()]
+        
+        print(green(f"[+] Loaded {len(subdomains)} subdomains from {wordlist_path}"))
+        return subdomains
+    except Exception as e:
+        print(red(f"[!] Error loading wordlist: {str(e)}"))
+        sys.exit(1)
+
+# Domain checking functionality
+def check_domain(domain, config, report_file, discord_webhook=None):
+    """Check if a domain exists and is accessible."""
+    global TOTAL_CHECKED, RATE_LIMIT_DELAY, BLOCKED_IPS
+    
+    # Update progress
+    with PROGRESS_LOCK:
+        TOTAL_CHECKED += 1
+    
+    # Configuration parameters
+    timeout = int(config['General']['timeout'])
+    verify_ssl = config['General'].getboolean('verify_ssl')
+    user_agent_rotation = config['General'].getboolean('user_agent_rotation')
+    max_retries = int(config['General']['max_retries'])
+    waf_bypass = config['General'].getboolean('waf_bypass')
+    follow_redirects = config['HTTP'].getboolean('follow_redirects')
+    rate_limit_detection = config['General'].getboolean('rate_limit_detection')
+    proxy_enabled = config['General'].getboolean('proxy_enabled')
+    
+    # Prepare headers
+    if user_agent_rotation:
+        user_agent = get_random_user_agent()
+    else:
+        user_agent = config['General']['user_agent']
+    
+    headers = {
+        'User-Agent': user_agent,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'close'
+    }
+    
+    # Add additional headers from config
+    if 'headers' in config['HTTP']:
+        for header_line in config['HTTP']['headers'].split('\n'):
+            if ':' in header_line:
+                key, value = header_line.split(':', 1)
+                headers[key.strip()] = value.strip()
+    
+    # Add WAF bypass headers if enabled
+    if waf_bypass:
+        # Random client IP to bypass IP-based rate limiting
+        headers['X-Forwarded-For'] = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+        headers['X-Real-IP'] = f"10.{random.randint(1, 254)}.{random.randint(1, 254)}.{random.randint(1, 254)}"
+        
+        # Add random referrer
+        referrers = [
+            'https://www.google.com/',
+            'https://www.bing.com/',
+            'https://search.yahoo.com/',
+            'https://duckduckgo.com/',
+            'https://www.linkedin.com/',
+            'https://www.facebook.com/',
+            'https://twitter.com/'
+        ]
+        headers['Referer'] = random.choice(referrers)
+    
+    # Get proxy if enabled
+    proxy = get_next_proxy() if proxy_enabled and PROXIES else None
+    
+    # Apply rate limit delay if needed
+    if RATE_LIMIT_DELAY > 0:
+        time.sleep(RATE_LIMIT_DELAY)
+    
+    protocols = ['http', 'https']
+    
+    for protocol in protocols:
+        # Try up to max_retries times
+        for attempt in range(max_retries):
+            try:
+                start_time = time.perf_counter()
+                url = f"{protocol}://{domain}"
+                
+                response = requests.get(
+                    url, 
+                    headers=headers, 
+                    timeout=timeout, 
+                    verify=verify_ssl,
+                    allow_redirects=follow_redirects,
+                    proxies=proxy
+                )
+                
+                end_time = time.perf_counter()
+                response_time = (end_time - start_time) * 1000  # Convert to milliseconds
+                
+                # Check for rate limiting
+                if rate_limit_detection and detect_rate_limit(response):
+                    logger.warning(f"Rate limiting detected! Adding delay and retrying...")
+                    with PROGRESS_LOCK:
+                        RATE_LIMIT_DELAY = min(RATE_LIMIT_DELAY + 0.5, 5.0)  # Increase delay up to 5 seconds
+                    
+                    # If we have proxies, switch to the next one
+                    if proxy_enabled and PROXIES:
+                        proxy = get_next_proxy()
+                    
+                    if attempt < max_retries - 1:
+                        time.sleep(1)  # Wait before retrying
+                        continue
+                else:
+                    # If no rate limiting, gradually decrease the delay
+                    with PROGRESS_LOCK:
+                        RATE_LIMIT_DELAY = max(RATE_LIMIT_DELAY - 0.1, 0)
+                
+                # Detect WAF
+                waf_detection = detect_waf(response) if config['HTTP'].getboolean('fingerprint_waf') else []
+                
+                # If we got any valid response, consider it found
+                if response.status_code:
+                    # Get IP using DNS
+                    ip_address = get_ip_address(domain, random.sample(DNS_SERVERS, min(3, len(DNS_SERVERS))) if DNS_SERVERS else None)
+                    
+                    # If DNS method fails, try socket as fallback
+                    if not ip_address:
+                        try:
+                            ip_address = socket.gethostbyname(domain)
+                        except socket.gaierror:
+                            pass
+                    
+                    # If socket method fails, try ping as final fallback
+                    if not ip_address:
+                        ip_address = ping_domain(domain)
+                    
+                    if ip_address:
+                        # Get technologies used
+                        technologies = []
+                        if config['Analysis'].getboolean('technology_detect'):
+                            technologies = detect_technologies(response)
+                        
+                        # Get SSL info if HTTPS and enabled
+                        ssl_info = {}
+                        if protocol == 'https' and config['Analysis'].getboolean('ssl_info'):
+                            ssl_info = get_ssl_info(domain)
+                        
+                        # Get favicon hash if enabled
+                        favicon_hash = None
+                        if config['Analysis'].getboolean('favicon_hash'):
+                            favicon_hash = get_favicon_hash(url)
+                        
+                        # Format the output
+                        status_str = f"{response.status_code}"
+                        if response.status_code == 200:
+                            status_str = green(status_str)
+                        elif response.status_code in [403, 401]:
+                            status_str = yellow(status_str)
+                        elif response.status_code >= 500:
+                            status_str = red(status_str)
+                        
+                        # Prepare WAF info string
+                        waf_str = f"WAF: {', '.join(waf_detection)}" if waf_detection else ""
+                        
+                        # Prepare server info
+                        server = response.headers.get('Server', 'Unknown')
+                        
+                        discovery_message = (f"\n[+] Found: {green(domain)} | "
+                                            f"IP: {cyan(ip_address)} | "
+                                            f"Status: {status_str} | "
+                                            f"Server: {magenta(server)} | "
+                                            f"Response: {blue(f'{response_time:.1f}ms')}")
+                        
+                        # Add WAF info if detected
+                        if waf_str:
+                            discovery_message += f" | {red(waf_str)}"
+                        
+                        print(discovery_message)
+                        
+                        # Print technologies if found
+                        if technologies:
+                            tech_list = ", ".join(technologies[:5])
+                            if len(technologies) > 5:
+                                tech_list += f" and {len(technologies) - 5} more"
+                            print(f"    └─ Technologies: {yellow(tech_list)}")
+                        
+                        # Prepare result data
+                        domain_data = {
+                            'domain': domain,
+                            'ip': ip_address,
+                            'status': response.status_code,
+                            'protocol': protocol,
+                            'response_time': response_time,
+                            'server': server,
+                            'technologies': technologies,
+                            'waf': waf_detection,
+                            'headers': dict(response.headers),
+                            'favicon_hash': favicon_hash,
+                        }
+                        
+                        # Add SSL info if available
+                        if ssl_info and not 'error' in ssl_info:
+                            domain_data['ssl'] = ssl_info
+                        
+                        # Add to global list of found domains
+                        FOUND_DOMAINS.append(domain_data)
+                        
+                        # Write to report file in CSV format
+                        with open(report_file, 'a') as f:
+                            tech_str = "|".join(technologies) if technologies else ""
+                            waf_str = "|".join(waf_detection) if waf_detection else ""
+                            csv_line = f"{domain},{ip_address},{response.status_code},{protocol},{response_time:.1f},{server},{tech_str},{waf_str}\n"
+                            f.write(csv_line)
+                        
+                        # Save detailed JSON data if enabled
+                        if config['Output'].getboolean('json_output'):
+                            json_dir = Path(f"{TEMP_DIR}/json")
+                            json_dir.mkdir(exist_ok=True)
+                            
+                            with open(f"{json_dir}/{domain.replace('.', '_')}.json", 'w') as f:
+                                json.dump(domain_data, f, indent=2)
+                        
+                        # Save HTML content if enabled
+                        if config['Output'].getboolean('save_html'):
+                            html_dir = Path(f"{TEMP_DIR}/html")
+                            html_dir.mkdir(exist_ok=True)
+                            
+                            with open(f"{html_dir}/{domain.replace('.', '_')}.html", 'w', encoding='utf-8') as f:
+                                f.write(response.text)
+                        
+                        # Save response headers if enabled
+                        if config['Output'].getboolean('save_headers'):
+                            headers_dir = Path(f"{TEMP_DIR}/headers")
+                            headers_dir.mkdir(exist_ok=True)
+                            
+                            with open(f"{headers_dir}/{domain.replace('.', '_')}.txt", 'w') as f:
+                                for header, value in response.headers.items():
+                                    f.write(f"{header}: {value}\n")
+                        
+                        # Take screenshot if enabled and selenium is available
+                        screenshot_path = None
+                        if config['Analysis'].getboolean('screenshot') and SELENIUM_AVAILABLE:
+                            try:
+                                screenshot_dir = Path(config['General']['screenshot_dir'])
+                                screenshot_dir.mkdir(exist_ok=True)
+                                
+                                screenshot_path = f"{screenshot_dir}/{domain.replace('.', '_')}.png"
+                                
+                                options = Options()
+                                options.add_argument('--headless')
+                                options.add_argument('--no-sandbox')
+                                options.add_argument('--disable-dev-shm-usage')
+                                options.add_argument(f"user-agent={user_agent}")
+                                
+                                driver = webdriver.Chrome(options=options)
+                                driver.set_page_load_timeout(timeout)
+                                driver.get(url)
+                                time.sleep(2)  # Wait for page to load
+                                driver.save_screenshot(screenshot_path)
+                                driver.quit()
+                                
+                                print(f"    └─ Screenshot saved: {screenshot_path}")
+                            except Exception as e:
+                                logger.error(f"Error taking screenshot: {e}")
+                        
+                        # Send Discord notification if enabled
+                        if discord_webhook and config['Discord'].getboolean('enabled'):
+                            threshold = int(config['Discord']['notification_threshold'])
+                            if len(FOUND_DOMAINS) % threshold == 0:  # Only send every Nth finding
+                                domain_data['screenshot_path'] = screenshot_path
+                                send_discord_notification(discord_webhook, domain_data, config)
+                        
+                        # No need to check HTTPS if HTTP already worked
+                        return True
+                
+                # Break the retry loop if we got a response
+                break
+                
+            except requests.ConnectionError:
+                # Connection error usually means domain doesn't exist or isn't accessible
+                pass
+            except requests.Timeout:
+                # Timeout usually means domain exists but is slow
+                if check_domain_dns(domain):
+                    print(f"\n[!] Timeout for {yellow(domain)} but DNS resolves")
+            except Exception as e:
+                # For debugging, uncomment this:
+                # logger.error(f"Error checking {domain}: {str(e)}")
+                pass
+    
+    # Show progress if requested
+    if config['Output'].getboolean('show_progress'):
+        progress = (TOTAL_CHECKED / TOTAL_SUBDOMAINS) * 100
+        elapsed = time.time() - START_TIME
+        rate = TOTAL_CHECKED / elapsed if elapsed > 0 else 0
+        
+        # Print progress indicator that overwrites itself
+        print(f"\r[-] Progress: {progress:.1f}% | Checked: {TOTAL_CHECKED}/{TOTAL_SUBDOMAINS} | "
+              f"Found: {len(FOUND_DOMAINS)} | Rate: {rate:.1f}/s", end="", flush=True)
+    
+    return False
+
+def process_subdomains(target_domain, wordlist_path, report_file, config, discord_webhook=None):
+    """Process subdomains from a wordlist and various sources."""
+    global TOTAL_SUBDOMAINS, START_TIME, DNS_SERVERS, PROXIES, RESUMED_SCAN
+    
+    # Clean the target domain
+    target_domain = clean_domain(target_domain)
+    
+    if not is_valid_domain(target_domain):
+        print(red(f"[!] Invalid domain: {target_domain}"))
+        return
+    
+    # Set up DNS servers
+    dns_servers_str = config['General']['dns_servers']
+    if dns_servers_str:
+        DNS_SERVERS = dns_servers_str.split(',')
+        print(green(f"[+] Using DNS servers: {', '.join(DNS_SERVERS)}"))
+    
+    # Load proxies if enabled
+    if config['General'].getboolean('proxy_enabled'):
+        proxy_file = config['General']['proxy_file']
+        PROXIES = load_proxies(proxy_file)
+    
+    # Check for wildcard DNS before starting
+    has_wildcard, wildcard_ip = check_wildcard_dns(target_domain)
+    if has_wildcard:
+        print(red(f"[!] Warning: Wildcard DNS detected for {target_domain} pointing to {wildcard_ip}"))
+        print(yellow("[!] This may lead to false positives. Consider using more validation steps."))
+        
+        try:
+            choice = input(yellow("[?] Do you want to continue anyway? (Y/n) >> "))
+            if choice.lower() not in ['y', 'yes', '']:
+                print(yellow("[!] Scan cancelled."))
+                return
+        except KeyboardInterrupt:
+            print("\n[-] Cancelled.")
+            return
+    
+    # Get WHOIS information if enabled
+    if config['Analysis'].getboolean('whois_lookup'):
+        print(cyan("[*] Getting WHOIS information..."))
+        whois_info = whois.whois(target_domain)
+        if whois_info and not whois_info.status == "invalid":
+            print(green("[+] Domain registration information:"))
+            print(f"    └─ Registrar: {whois_info.registrar}")
+            print(f"    └─ Creation date: {whois_info.creation_date}")
+            print(f"    └─ Expiration date: {whois_info.expiration_date}")
+            
+            # Save WHOIS data
+            whois_dir = Path(f"{TEMP_DIR}/whois")
+            whois_dir.mkdir(exist_ok=True)
+            
+            with open(f"{whois_dir}/{target_domain.replace('.', '_')}.json", 'w') as f:
+                json.dump(whois_info, f, indent=2, default=str)
+    
     # Gather subdomains from various sources
     all_domains = set()
     
@@ -1162,55 +2098,53 @@ def detect_technologies(resp):
                     
                     with open(f"{takeover_dir}/{domain.replace('.', '_')}.json", 'w') as f:
                         json.dump(takeover_result, f, indent=2)
-    
-    # Calculate and print statistics
-    elapsed_time = time.time() - START_TIME
-    print("\n" + "=" * 60)
-    print(green(f"[+] Scan completed!"))
-    print(f"[+] Total subdomains checked: {TOTAL_CHECKED}")
-    print(f"[+] Found {len(FOUND_DOMAINS)} active subdomains")
-    print(f"[+] Elapsed time: {elapsed_time:.2f} seconds")
-    print(f"[+] Average speed: {TOTAL_CHECKED / elapsed_time:.2f} domains/second")
-    print(f"[+] Results saved to: {report_file}")
-    
-    # Collect WAFs detected
-    all_wafs = set()
-    for domain_data in FOUND_DOMAINS:
-        if 'waf' in domain_data and domain_data['waf']:
-            for waf in domain_data['waf']:
-                all_wafs.add(waf)
-    
-    if all_wafs:
-        print(f"[+] WAFs detected: {', '.join(all_wafs)}")
-    
-    # List top technologies
-    all_techs = {}
-    for domain_data in FOUND_DOMAINS:
-        if 'technologies' in domain_data and domain_data['technologies']:
-            for tech in domain_data['technologies']:
-                all_techs[tech] = all_techs.get(tech, 0) + 1
-    
-    if all_techs:
-        top_techs = sorted(all_techs.items(), key=lambda x: x[1], reverse=True)[:10]
-        print(f"[+] Top technologies: " + ", ".join(f"{tech} ({count})" for tech, count in top_techs))
-    
-    print("=" * 60)
-    
-    # Generate summary file
-    summary_file = f"Summary_{target_domain}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(summary_file, 'w') as f:
-        f.write(f"CloudKiller Pro v{VERSION} - Scan Summary\n")
-        f.write("=" * 50 + "\n\n")
-        f.write(f"Target Domain: {target_domain}\n")
-        f.write(f"Scan Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Scan Duration: {elapsed_time:.2f} seconds\n")
-        f.write(f"Scan ID: {SCAN_ID}\n\n")
-        
-        f.write(f"Subdomains Checked: {TOTAL_CHECKED}\n")
-        f.write(f"Subdomains Found: {len(FOUND_DOMAINS)}\n")
-        f.write(f"Success Rate: {(len(FOUND_DOMAINS) / TOTAL_CHECKED * 100) if TOTAL_CHECKED > 0 else 0:.2f}%\n\n")
-        
-        f.write("Detected WAFs:\n")
+                        # Calculate and print statistics
+                        elapsed_time = time.time() - START_TIME
+                        print("\n" + "=" * 60)
+                        print(green(f"[+] Scan completed!"))
+                        print(f"[+] Total subdomains checked: {TOTAL_CHECKED}")
+                        print(f"[+] Found {len(FOUND_DOMAINS)} active subdomains")
+                        print(f"[+] Elapsed time: {elapsed_time:.2f} seconds")
+                        print(f"[+] Average speed: {TOTAL_CHECKED / elapsed_time:.2f} domains/second")
+                        print(f"[+] Results saved to: {report_file}")
+                        
+                        # Collect WAFs detected
+                        all_wafs = set()
+                        for domain_data in FOUND_DOMAINS:
+                            if 'waf' in domain_data and domain_data['waf']:
+                                for waf in domain_data['waf']:
+                                    all_wafs.add(waf)
+                        
+                        if all_wafs:
+                            print(f"[+] WAFs detected: {', '.join(all_wafs)}")
+                        
+                        # List top technologies
+                        all_techs = {}
+                        for domain_data in FOUND_DOMAINS:
+                            if 'technologies' in domain_data and domain_data['technologies']:
+                                for tech in domain_data['technologies']:
+                                    all_techs[tech] = all_techs.get(tech, 0) + 1
+                        
+                        if all_techs:
+                            top_techs = sorted(all_techs.items(), key=lambda x: x[1], reverse=True)[:10]
+                            print(f"[+] Top technologies: " + ", ".join(f"{tech} ({count})" for tech, count in top_techs))
+                        
+                        print("=" * 60)
+                        
+                        # Generate summary file
+                        summary_file = f"Summary_{target_domain}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                        with open(summary_file, 'w') as f:
+                            f.write(f"CloudKiller Pro v{VERSION} - Scan Summary\n")
+                            f.write("=" * 50 + "\n\n")
+                            f.write(f"Target Domain: {target_domain}\n")
+                            f.write(f"Scan Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                            f.write(f"Scan Duration: {elapsed_time:.2f} seconds\n")
+                            f.write(f"Scan ID: {SCAN_ID}\n\n")
+                            
+                            f.write(f"Subdomains Checked: {TOTAL_CHECKED}\n")
+                            f.write(f"Subdomains Found: {len(FOUND_DOMAINS)}\n")
+                            f.write(f"Success Rate: {(len(FOUND_DOMAINS) / TOTAL_CHECKED * 100) if TOTAL_CHECKED > 0 else 0:.2f}%\n\n")
+                            f.write("Detected WAFs:\n")
         for waf in sorted(all_wafs):
             f.write(f"- {waf}\n")
         f.write("\n")

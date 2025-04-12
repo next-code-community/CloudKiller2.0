@@ -1,0 +1,39 @@
+# CloudKiller Pro - Requisiti completi
+
+# Dipendenze di base
+requests>=2.28.0
+colorama>=0.4.6
+dnspython>=2.3.0
+urllib3>=1.26.15
+beautifulsoup4>=4.11.1
+tqdm>=4.65.0
+pyfiglet>=0.8.post1
+validators>=0.20.0
+python-dateutil>=2.8.2
+concurrent-log-handler>=0.9.24
+configparser>=5.3.0
+ipaddress>=1.0.23
+# socket.io-client>=0.5.3  # Sostituito con python-socketio
+python-socketio>=5.8.0
+socksio>=1.0.0
+websocket-client>=1.5.1
+
+# Dipendenze per funzionalità principali
+fake-useragent>=0.1.11
+tldextract>=3.2.0
+cryptography>=36.0.2
+lxml>=4.8.0
+aiohttp>=3.8.1
+python-whois>=0.7.3
+
+# Dipendenze per funzionalità avanzate
+selenium>=4.1.3                # Per screenshot
+webdriver-manager>=3.5.4       # Per gestione webdriver con Selenium
+mmh3>=3.0.0                    # Per hashing favicon
+python-nmap>=0.7.1             # Per port scanning
+pyOpenSSL>=22.0.0              # Per analisi avanzata SSL
+shodan>=1.27.0                 # Per ricerca Shodan
+censys>=2.1.3                  # Per ricerca Censys
+netaddr>=0.8.0                 # Per gestione avanzata di IP
+Pillow>=9.1.0                  # Per elaborazione immagini
+PySocks>=1.7.1                 # Per supporto SOCKS proxy
