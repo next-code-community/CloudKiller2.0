@@ -3,7 +3,7 @@
 
 """
 CloudKiller Pro - Advanced Subdomain Discovery & Cloud Protection Bypass Tool
-By: FD (github.com/next-code-community)
+By: NC (github.com/next-code-community)
 Enhanced version with multiple passive DNS sources, WAF bypass, and advanced analysis
 """
 
@@ -1833,7 +1833,7 @@ def process_subdomains(target_domain, wordlist_path, report_file, config, discor
         return
     
     # Set up DNS servers
-    dns_servers_str = config['General']['dns_servers']
+    dns_servers_str = config['General'].get('dns_servers', '8.8.8.8,1.1.1.1')
     if dns_servers_str:
         DNS_SERVERS = dns_servers_str.split(',')
         print(green(f"[+] Using DNS servers: {', '.join(DNS_SERVERS)}"))
