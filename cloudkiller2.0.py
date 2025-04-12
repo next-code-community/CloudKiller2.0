@@ -3,7 +3,7 @@
 
 """
 CloudKiller Pro - Advanced Subdomain Discovery & Cloud Protection Bypass Tool
-By: NC (github.com/next-code-community)
+By: FD (github.com/next-code-community)
 Enhanced version with multiple passive DNS sources, WAF bypass, and advanced analysis
 """
 
@@ -1859,21 +1859,17 @@ def process_subdomains(target_domain, wordlist_path, report_file, config, discor
             return
     
     # Get WHOIS information if enabled
-    if config['Analysis'].getboolean('whois_lookup'):
-        print(cyan("[*] Getting WHOIS information..."))
-        whois_info = whois.whois(target_domain)
-        if whois_info and not whois_info.status == "invalid":
-            print(green("[+] Domain registration information:"))
-            print(f"    └─ Registrar: {whois_info.registrar}")
-            print(f"    └─ Creation date: {whois_info.creation_date}")
-            print(f"    └─ Expiration date: {whois_info.expiration_date}")
-            
-            # Save WHOIS data
-            whois_dir = Path(f"{TEMP_DIR}/whois")
-            whois_dir.mkdir(exist_ok=True)
-            
-            with open(f"{whois_dir}/{target_domain.replace('.', '_')}.json", 'w') as f:
-                json.dump(whois_info, f, indent=2, default=str)
+    # Prima di usare config['Analysis'].getboolean(...), verifica che la sezione esista
+    if 'Analysis' not in config:
+        config['Analysis'] = {}
+        config['Analysis']['whois_lookup'] = 'True'
+        config['Analysis']['port_scan'] = 'False'
+        config['Analysis']['vuln_check'] = 'False'
+        config['Analysis']['directory_check'] = 'False'
+        config['Analysis']['ssl_info'] = 'True'
+        config['Analysis']['favicon_hash'] = 'True'
+        config['Analysis']['technology_detect'] = 'True'
+        config['Analysis']['screenshot'] = 'False'
     
     # Gather subdomains from various sources
     all_domains = set()
